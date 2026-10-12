@@ -1,0 +1,38 @@
+{
+  "task-os": {
+    "webhookUrl": "",
+    "webhookKey": ""
+  },
+  "inspiration": {
+    "webhookUrl": "",
+    "webhookKey": ""
+  },
+  "content": {
+    "webhookUrl": "",
+    "webhookKey": ""
+  },
+  "trading": {
+    "webhookUrl": "",
+    "webhookKey": ""
+  },
+  "code": {
+    "webhookUrl": "",
+    "webhookKey": ""
+  },
+  "overseas": {
+    "webhookUrl": "",
+    "webhookKey": ""
+  },
+  "internet": {
+    "webhookUrl": "",
+    "webhookKey": ""
+  },
+  "jokes": {
+    "webhookUrl": "",
+    "webhookKey": ""
+  },
+  "ai-ops": {
+    "webhookUrl": "",
+    "webhookKey": ""
+  }
+}
