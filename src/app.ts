@@ -1,9 +1,23 @@
 import Fastify from "fastify";
+import websocket from "@fastify/websocket";
 import type { AppConfig } from "./config.js";
 import type { MessageStore } from "./store.js";
 import { registerRoutes } from "./routes.js";
+import { WsClientRegistry } from "./ws-registry.js";
+import { registerWebSocketRoutes } from "./ws.js";
 
-export async function buildApp(config: AppConfig, store: MessageStore) {
+export interface BuildAppOptions {
+  enableWebSocket?: boolean;
+}
+
+export async function buildApp(
+  config: AppConfig,
+  store: MessageStore,
+  options: BuildAppOptions = {}
+) {
+  const enableWebSocket = options.enableWebSocket ?? true;
+  const wsRegistry = enableWebSocket ? new WsClientRegistry() : undefined;
+
   const app = Fastify({
     logger: true,
   });
@@ -20,6 +34,10 @@ export async function buildApp(config: AppConfig, store: MessageStore) {
     });
   });
 
-  registerRoutes(app, config, store);
+  if (wsRegistry) {
+    await app.register(websocket);
+    registerWebSocketRoutes(app, config, store, wsRegistry);
+  }
+  registerRoutes(app, config, store, wsRegistry);
   return app;
 }
