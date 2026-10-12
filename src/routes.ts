@@ -1,9 +1,13 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { AppConfig } from "./config.js";
-import { isBotConfigured, listBotsPublic, resolveBot } from "./bots.js";
+import { listBotsPublic } from "./bots.js";
 import type { MessageStore } from "./store.js";
 import { createMessage, toStoredRecord } from "./message.js";
 import { postJson } from "./forward.js";
+import { assertAuth } from "./auth.js";
+import { pushToBotWebhook } from "./bot-push.js";
+import type { WsClientRegistry } from "./ws-registry.js";
+import { handlePushLocal, type PushLocalBody } from "./ws.js";
 
 interface WebhookBody {
   type?: string;
@@ -18,31 +22,6 @@ interface PushBody {
   traceId?: string;
 }
 
-function extractSecret(req: FastifyRequest): string | undefined {
-  const header = req.headers["x-relay-secret"];
-  if (typeof header === "string" && header) return header;
-  const auth = req.headers.authorization;
-  if (auth?.startsWith("Bearer ")) {
-    return auth.slice("Bearer ".length).trim();
-  }
-  return undefined;
-}
-
-function assertAuth(req: FastifyRequest, secret: string): void {
-  const provided = extractSecret(req);
-  if (!provided || provided !== secret) {
-    const err = new Error("Unauthorized") as Error & { statusCode: number };
-    err.statusCode = 401;
-    throw err;
-  }
-}
-
-function webhookAuthHeaders(webhookKey?: string): Record<string, string> | undefined {
-  const key = webhookKey?.trim();
-  if (!key) return undefined;
-  return { Authorization: `Bearer ${key}` };
-}
-
 async function handleOutboundPush(
   req: FastifyRequest<{ Body: PushBody }>,
   reply: FastifyReply,
@@ -52,56 +31,30 @@ async function handleOutboundPush(
 ) {
   assertAuth(req, config.relaySecret);
 
-  const bot = resolveBot(config.bots, botId);
-  if (!bot) {
-    return reply.status(404).send({
-      error: "bot_not_found",
-      botId,
-      message: `Unknown bot id: ${botId}`,
-    });
-  }
-
-  if (!isBotConfigured(bot)) {
-    return reply.status(422).send({
-      error: "bot_not_configured",
-      botId,
-      name: bot.name,
-      message:
-        `Bot "${botId}" (${bot.name}) has no webhook URL configured. ` +
-        `Set webhookUrl/webhookKey via BOTS_JSON, bots.json, or legacy GROKBOT_WEBHOOK_URL for the default bot.`,
-    });
-  }
-
   const type = req.body?.type ?? "push";
   const payload = req.body?.payload ?? req.body;
-  const source = `grokbot:${botId}`;
-  const message = createMessage(source, type, payload, req.body?.traceId);
-
-  let record = toStoredRecord(message, "received", { direction: "outbound" });
-  await store.save(record);
-
-  const result = await postJson(
-    bot.webhookUrl!,
-    message,
-    webhookAuthHeaders(bot.webhookKey)
-  );
-  record = toStoredRecord(message, result.ok ? "forwarded" : "failed", {
-    direction: "outbound",
-    error: result.error,
-  });
-  await store.save(record);
-
-  return reply.status(202).send({
-    traceId: message.traceId,
-    status: record.status,
+  const result = await pushToBotWebhook(
+    config,
+    store,
     botId,
-  });
+    type,
+    payload,
+    req.body?.traceId,
+    "grokbot"
+  );
+
+  if (!result.ok) {
+    return reply.status(result.httpStatus).send(result.body);
+  }
+
+  return reply.status(result.httpStatus).send(result.body);
 }
 
 export function registerRoutes(
   app: FastifyInstance,
   config: AppConfig,
-  store: MessageStore
+  store: MessageStore,
+  wsRegistry?: WsClientRegistry
 ): void {
   app.get("/health", async () => ({
     ok: true,
@@ -177,4 +130,33 @@ export function registerRoutes(
       return handleOutboundPush(req, reply, config, store, botId);
     }
   );
+
+  app.post<{ Params: { clientId: string }; Body: PushLocalBody }>(
+    "/push-local/:clientId",
+    async (req, reply) => {
+      assertAuth(req, config.relaySecret);
+      if (!wsRegistry) {
+        return reply.status(503).send({
+          error: "ws_unavailable",
+          message: "WebSocket relay is not enabled on this server instance",
+        });
+      }
+      const result = await handlePushLocal(
+        config,
+        store,
+        wsRegistry,
+        req.params.clientId,
+        req.body ?? {}
+      );
+      return reply.status(result.statusCode).send(result.body);
+    }
+  );
+
+  app.get("/ws/clients", async (req, reply) => {
+    assertAuth(req, config.relaySecret);
+    if (!wsRegistry) {
+      return { clients: [] };
+    }
+    return { clients: wsRegistry.listConnected() };
+  });
 }

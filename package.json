@@ -14,11 +14,14 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@fastify/websocket": "^11.3.4",
     "fastify": "^5.2.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "@types/ws": "^8.18.2",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "ws": "^8.22.0"
   }
 }
