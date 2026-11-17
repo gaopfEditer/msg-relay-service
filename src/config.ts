@@ -1,4 +1,5 @@
 import { loadBotMap, type BotMap } from "./bots.js";
+import { loadPrioritySources, type PrioritySource } from "./priority-sources.js";
 
 export interface AppConfig {
   port: number;
@@ -10,6 +11,9 @@ export interface AppConfig {
   messagesFile: string;
   defaultBotId: string;
   bots: BotMap;
+  prioritySourcesFile: string;
+  priorityQueueFile: string;
+  prioritySources: PrioritySource[];
 }
 
 function requireEnv(name: string, value: string | undefined): string {
@@ -38,6 +42,11 @@ export function loadConfig(): AppConfig {
   const grokbotWebhookKey = legacyGrokbotKey();
   const dataDir = process.env.DATA_DIR?.trim() || "data";
   const messagesFile = `${dataDir}/messages.jsonl`;
+  const prioritySourcesFile =
+    process.env.PRIORITY_SOURCES_PATH?.trim() || `${dataDir}/priority-sources.json`;
+  const priorityQueueFile =
+    process.env.PRIORITY_QUEUE_FILE?.trim() || `${dataDir}/priority-queue.jsonl`;
+  const prioritySources = loadPrioritySources(prioritySourcesFile);
   const defaultBotId = process.env.DEFAULT_BOT_ID?.trim() || "task-os";
   const botsConfigPath = process.env.BOTS_CONFIG_PATH?.trim() || undefined;
 
@@ -66,5 +75,8 @@ export function loadConfig(): AppConfig {
     messagesFile,
     defaultBotId,
     bots,
+    prioritySourcesFile,
+    priorityQueueFile,
+    prioritySources,
   };
 }

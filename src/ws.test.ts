@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 import { loadBotMap } from "./bots.js";
+import { loadPrioritySources } from "./priority-sources.js";
 import { MessageStore } from "./store.js";
 import { buildApp } from "./app.js";
 import type { AppConfig } from "./config.js";
@@ -17,6 +18,7 @@ function makeConfig(dataDir: string, botsJson?: string): AppConfig {
     botsJsonEnv: botsJson,
     defaultBotId: "task-os",
   });
+  const prioritySourcesFile = join(dataDir, "priority-sources.json");
   return {
     port: 0,
     relaySecret: SECRET,
@@ -24,6 +26,9 @@ function makeConfig(dataDir: string, botsJson?: string): AppConfig {
     messagesFile: join(dataDir, "messages.jsonl"),
     defaultBotId: "task-os",
     bots,
+    prioritySourcesFile,
+    priorityQueueFile: join(dataDir, "priority-queue.jsonl"),
+    prioritySources: loadPrioritySources(prioritySourcesFile),
   };
 }
 
