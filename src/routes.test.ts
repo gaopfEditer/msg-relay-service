@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadBotMap } from "./bots.js";
+import { loadPrioritySources } from "./priority-sources.js";
 import { MessageStore } from "./store.js";
 import { buildApp } from "./app.js";
 import type { AppConfig } from "./config.js";
@@ -19,6 +20,8 @@ function makeConfig(overrides: Partial<AppConfig> & { botsJson?: string }): AppC
     legacyGrokbotWebhookKey: overrides.grokbotWebhookKey,
     defaultBotId: overrides.defaultBotId ?? "task-os",
   });
+  const prioritySourcesFile =
+    overrides.prioritySourcesFile ?? join(dataDir, "priority-sources.json");
   return {
     port: 3000,
     relaySecret: SECRET,
@@ -29,6 +32,9 @@ function makeConfig(overrides: Partial<AppConfig> & { botsJson?: string }): AppC
     messagesFile: join(dataDir, "messages.jsonl"),
     defaultBotId: overrides.defaultBotId ?? "task-os",
     bots,
+    prioritySourcesFile,
+    priorityQueueFile: overrides.priorityQueueFile ?? join(dataDir, "priority-queue.jsonl"),
+    prioritySources: overrides.prioritySources ?? loadPrioritySources(prioritySourcesFile),
   };
 }
 

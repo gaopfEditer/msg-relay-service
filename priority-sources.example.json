@@ -1,0 +1,9 @@
+{
+  "_comment": "Copy to DATA_DIR/priority-sources.json (default: data/priority-sources.json). Add sources here, then restart the process. Unknown source ids are rejected and not stored. This file replaces the built-in default when present.",
+  "sources": [
+    {
+      "id": "pangmao",
+      "name": "胖猫社区"
+    }
+  ]
+}

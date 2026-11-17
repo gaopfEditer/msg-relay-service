@@ -5,6 +5,9 @@ import type { MessageStore } from "./store.js";
 import { registerRoutes } from "./routes.js";
 import { WsClientRegistry } from "./ws-registry.js";
 import { registerWebSocketRoutes } from "./ws.js";
+import { PriorityQueueStore } from "./priority-queue.js";
+import { registerPriorityRoutes } from "./priority-routes.js";
+import { PrioritySubscriberHub, registerPriorityWebSocket } from "./priority-ws.js";
 
 export interface BuildAppOptions {
   enableWebSocket?: boolean;
@@ -17,6 +20,9 @@ export async function buildApp(
 ) {
   const enableWebSocket = options.enableWebSocket ?? true;
   const wsRegistry = enableWebSocket ? new WsClientRegistry() : undefined;
+  const priorityQueue = new PriorityQueueStore(config.priorityQueueFile);
+  await priorityQueue.init();
+  const priorityHub = new PrioritySubscriberHub();
 
   const app = Fastify({
     logger: true,
@@ -37,7 +43,9 @@ export async function buildApp(
   if (wsRegistry) {
     await app.register(websocket);
     registerWebSocketRoutes(app, config, store, wsRegistry);
+    registerPriorityWebSocket(app, config, priorityQueue, priorityHub);
   }
   registerRoutes(app, config, store, wsRegistry);
+  registerPriorityRoutes(app, config, priorityQueue, priorityHub);
   return app;
 }

@@ -1,6 +1,6 @@
 # msg-relay-service
 
-万能消息中转后台（MVP）：支撑 **Grok Bot** 消息的接收、存储与可选转发，并支持**多 Bot 出站推送**（每个 Bot 有稳定 `id`，对应 Cursor Automations Webhook URL + Bearer Key）。本地或长驻客户端可通过 **WebSocket** 与中转站双向通信（HTTP 触发下发、WS 回传结果）。日志持久化为本地 JSONL（`data/messages.jsonl`），无 Redis / BullMQ / PostgreSQL。
+万能消息中转后台（MVP）：支撑 **Grok Bot** 消息的接收、存储与可选转发，并支持**多 Bot 出站推送**（每个 Bot 有稳定 `id`，对应 Cursor Automations Webhook URL + Bearer Key）。本地或长驻客户端可通过 **WebSocket** 与中转站双向通信（HTTP 触发下发、WS 回传结果）。另外提供一条独立的**优先消息队列**（如胖猫社区卡片）：可落盘，订阅者离线时仍然入队。日志与队列均为本地 JSONL，无 Redis / BullMQ / PostgreSQL。
 
 ## 技术栈
 
@@ -22,6 +22,8 @@
 | `GROKBOT_WEBHOOK_URL` | 否 | **兼容旧部署**：当默认 bot（`task-os`）未配置 `webhookUrl` 时，作为其出站 Webhook |
 | `GROKBOT_WEBHOOK_KEY` / `GROKBOT_WEBHOOK_AUTH` | 否 | 与上配套的 Bearer Token（二者等价，任选其一） |
 | `DATA_DIR` | 否 | 数据目录，默认 `data` |
+| `PRIORITY_SOURCES_PATH` | 否 | 优先队列来源白名单，默认 `DATA_DIR/priority-sources.json`。文件不存在时仅允许 `pangmao` |
+| `PRIORITY_QUEUE_FILE` | 否 | 优先队列 JSONL，默认 `DATA_DIR/priority-queue.jsonl` |
 
 ### 预置 Bot 注册表（稳定 id）
 
@@ -263,6 +265,122 @@ curl -s -X POST http://localhost:3000/push-local/smoke-1 \
 
 在 wscat 中应看到下发帧；回发 `{"type":"result","payload":{"ok":true}}` 后，检查 `data/messages.jsonl` 与 `ack` 帧。
 
+## 优先消息队列
+
+与 `GET /ws`、`POST /push-local/:clientId` **分开**。`/ws` 仍是在线双向中继：客户端不在线时 `push-local` 返回 **503** `client_offline`，不排队。优先队列用来保存重要卡片（例如胖猫社区消息），没有订阅者时入队也成功，稍后仍可拉取或回放。
+
+持久化文件为 `data/priority-queue.jsonl`（可用 `PRIORITY_QUEUE_FILE` 覆盖）。进程内只保留最近 **1000** 条索引（`PRIORITY_MEMORY_CAP`）。更早的行仍在 JSONL 中，但 HTTP 列表和 WebSocket 回放只覆盖这 1000 条窗口。单次列表 / 回放默认 **50** 条，最多 **200** 条。
+
+### 来源白名单
+
+启动时读取 `DATA_DIR/priority-sources.json`（或 `PRIORITY_SOURCES_PATH`）。文件不存在时，允许列表只有：
+
+| id | 名称 |
+|----|------|
+| `pangmao` | 胖猫社区 |
+
+仓库根目录的 `priority-sources.example.json` 是模板。增加来源时复制为 `data/priority-sources.json` 并编辑 `sources`，然后**重启进程**。这是配置变更，不需要改代码。文件存在时**整体替换**内置默认值（请在文件里保留仍要使用的来源）。未知 `source` 返回 **422** `unknown_source`，**不会**写入 JSONL。
+
+### `POST /queue/priority`
+
+鉴权与其它 HTTP 写接口相同（`Authorization: Bearer <RELAY_SECRET>` 或 `X-Relay-Secret`）。
+
+```bash
+curl -s -X POST http://localhost:3000/queue/priority \
+  -H "Authorization: Bearer dev-secret" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source": "pangmao",
+    "card": {"title": "示例", "body": "卡片正文"},
+    "meta": {"via": "ocr", "yield_pct": 1.25}
+  }' | jq
+```
+
+`card` 是不透明 JSON 对象，按原样保存。`meta.via` 只能是 `"ocr"` 或 `"text"`。`meta.yield_pct` 必须是有限数字或 `null`。
+
+成功：**202**
+
+```json
+{ "id": "uuid", "source": "pangmao", "createdAt": "2026-01-01T00:00:00.000Z" }
+```
+
+没有 WebSocket 订阅者时同样返回 202。校验失败（缺字段、`card` 不是对象）为 **422** `invalid_body`。
+
+### `GET /queue/priority`
+
+鉴权后查看内存窗口里的最近记录，不返回密钥。`source` 可选；给出时必须在白名单内，否则 **422**。`limit` 默认 50，大于 200 时截断为 200。结果按时间从旧到新，是「最近 N 条」而不是全量历史。
+
+```bash
+curl -s "http://localhost:3000/queue/priority?source=pangmao&limit=50" \
+  -H "Authorization: Bearer dev-secret" | jq
+```
+
+```json
+{
+  "items": [
+    {
+      "id": "uuid",
+      "source": "pangmao",
+      "card": {},
+      "meta": { "via": "ocr", "yield_pct": null },
+      "createdAt": "2026-01-01T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+### `GET /queue/priority/sources`
+
+鉴权后返回当前白名单，只有 `id` 和 `name`。
+
+```bash
+curl -s http://localhost:3000/queue/priority/sources \
+  -H "Authorization: Bearer dev-secret" | jq
+```
+
+### `GET /ws/priority`
+
+订阅优先队列。可有多个订阅者。入队不依赖是否有人在线。
+
+- **URL**：`ws://<host>:<port>/ws/priority?token=<RELAY_SECRET>`
+- **可选** `source`：省略则订阅全部已允许来源；填写时必须在白名单内，否则连接以关闭码 `1008`、原因 `unknown_source` 结束。
+- **鉴权**：查询参数 `token`，与 `RELAY_SECRET` 相同。无效时关闭码 `1008`、原因 `unauthorized`。
+- **回放默认关闭**。连接后先收到一帧 `connected`，其中 `replayed` 为随后紧跟的历史帧数量（默认 0）。之后只推送新入队的消息。
+- **显式回放**：`replay=1`（也接受 `true` / `yes`）发送该订阅范围内最近 `limit` 条（默认 50，最大 200），从旧到新，帧类型与实时推送相同。
+- **游标**：`since=<id>` 表示回放该 id **之后**的记录（同样受 `limit` 限制，从游标后的第一条算起）。`since` 本身就会打开回放。id 不在当前内存窗口内时，`sinceFound` 为 `false`，`replayed` 为 0，不回退成「最近 N 条」。
+- `limit` 不是正整数时关闭码 `1008`、原因 `invalid_limit`。
+
+连接确认示例：
+
+```json
+{
+  "type": "connected",
+  "channel": "priority",
+  "source": "pangmao",
+  "replayed": 0,
+  "time": "2026-01-01T00:00:00.000Z"
+}
+```
+
+未带 `source` 时 `source` 为 `null`。使用 `since` 时还会带上 `since` 和 `sinceFound`。
+
+之后每条消息一帧：
+
+```json
+{
+  "type": "priority_card",
+  "id": "uuid",
+  "source": "pangmao",
+  "card": {"title": "示例"},
+  "meta": {"via": "text", "yield_pct": null},
+  "createdAt": "2026-01-01T00:00:00.000Z"
+}
+```
+
+```bash
+npx --yes wscat -c "ws://localhost:3000/ws/priority?token=dev-secret&source=pangmao&replay=1&limit=50"
+```
+
 ## 目录结构
 
 ```
@@ -274,13 +392,32 @@ src/
   routes.ts   # HTTP 路由
   ws.ts       # WebSocket /push-local 逻辑
   ws-registry.ts
+  priority-sources.ts  # 优先队列来源白名单
+  priority-queue.ts    # 优先队列 JSONL + 内存索引
+  priority-routes.ts   # POST/GET /queue/priority
+  priority-ws.ts       # GET /ws/priority
   auth.ts
   bot-push.ts # 出站 bot webhook 复用
   message.ts  # Message 类型与构造
   store.ts    # JSONL 存储
   forward.ts  # HTTP 转发
 bots.example.json
+priority-sources.example.json
 ```
+
+## 更新已有部署
+
+优先队列与现有 `/ws` 路由一起发布。在已有安装目录拉取后构建并重启进程即可，例如：
+
+```bash
+cd /www/wwwroot/op.g.ezcoin.ink/msg-relay-service
+git pull
+npm install
+npm run build
+# 按现有方式重启 Node（宝塔 / pm2 / systemd）。不要把 .env 或真实密钥提交到 Git。
+```
+
+未放置 `data/priority-sources.json` 时，来源只有胖猫社区。要增加来源，改该文件后再次重启。
 
 ## 许可证
 
